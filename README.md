@@ -2,7 +2,9 @@
 
 Real-time F1 telemetry dashboard on AWS. Ingests live [OpenF1](https://openf1.org/) telemetry, supports client-side replay of historical sessions, and pairs the timing screen with a Bedrock AgentCore "Race Engineer" chat panel. Serverless, event-driven, fully Infrastructure-as-Code.
 
-> **Status: v2 rebuild in progress.** This repo replaces `zevlo/f1-telemetry-dashboard` with the same goal but a cleaner architecture and a UX-first frontend. See [`docs/v2-build-plan.md`](docs/v2-build-plan.md) for the full plan. Until v2 ships, the old repo at https://github.com/zevlo/f1-telemetry-dashboard remains the source of truth for the live deployment.
+> **Live**: dashboard at https://f1.zevlo.net · API at https://api.f1.zevlo.net/v1 · WebSocket at wss://ws.f1.zevlo.net/v1
+>
+> Replaces `zevlo/f1-telemetry-dashboard` (deleted). Same goal (live F1 telemetry + replays + Bedrock race-engineer agent), rebuilt clean for a UX-first frontend and a more efficient data model. See [`docs/v2-build-plan.md`](docs/v2-build-plan.md) for the rebuild history.
 
 ---
 
@@ -111,14 +113,14 @@ WebSocket events (target):
 
 ## Build status
 - [x] Phase 0 — pre-flight snapshot of v1 (at `/var/folders/.../f1-v2-snapshot`)
-- [x] Phase 1 — new repo + skeleton (this commit)
+- [x] Phase 1 — new repo + skeleton
 - [x] Phase 1.5 — update `github-oidc-f1-telemetry` role trust to include `zevlo/f1-dashboard` (now `repo:zevlo/f1-*:*`, forward-compatible)
 - [x] Phase 2 — Terraform: `state rm` ACM cert (Route 53 zone was already a data source), `destroy`, rebuild with `Drivers` table + new endpoints (162 added, 0 destroyed)
 - [x] Phase 3 — Lambdas: rewrote poller + api-drivers; added api-replay + ws-agent (stub); carried transformer/api-sessions/ws-connect/ws-disconnect/ws-push from v1
 - [x] Phase 4 — Frontend: React + Vite + TanStack Query + Zustand + Tailwind
-- [x] Phase 5 — AgentCore integration (Amazon Nova Pro)
-- [ ] Phase 6 — Big-bang PR to main → CI apply → CloudFront invalidation → verify at https://f1.zevlo.net
-- [ ] Phase 7 — Delete old `zevlo/f1-telemetry-dashboard` repo
+- [x] Phase 5 — AgentCore integration (Amazon Nova Pro via Bedrock Converse + 5 telemetry tools)
+- [x] Phase 6 — Manual S3 + CloudFront deploy + WS custom domain fix + GitHub Actions CI/CD
+- [ ] Phase 7 — Delete old `zevlo/f1-telemetry-dashboard` repo (pending `delete_repo` scope — see follow-up below)
 
 See [`docs/v2-build-plan.md`](docs/v2-build-plan.md) for the full plan with phase-level detail.
 

@@ -241,19 +241,45 @@ Connected to `wss://meaysn87r1.execute-api.us-east-1.amazonaws.com/v1?sessionId=
 - `<thinking>...</thinking>` tags still leak into streamed output despite system-prompt rule. Nova Pro's native reasoning format. Either filter server-side (buffer + strip) or live with the visibility.
 - WS custom domain `wss://ws.f1.zevlo.net/v1` returns HTTP 403 on the WebSocket handshake. Raw execute-api URL works fine. Phase 6 will fix the api_mapping (likely needs `api_mapping_key = "v1"` or remove stage from URL).
 
-## Phase 6 — CI/CD + cutover (PENDING)
+## Phase 6 — CI/CD + cutover (DONE 2026-07-20)
 
-1. Author `.github/workflows/deploy.yml` (mirror v1: infra job → frontend job, OIDC, no static keys).
-2. New OIDC role trust applied (Phase 1.5).
-3. **Big-bang PR:** build everything on `feat/v2-rebuild` branch, do final review, merge to `main`. CI apply swaps S3 contents + CloudFront invalidation. Old repo stays available until v2 is verified live.
-4. Verify: `terraform output dashboard_url` → open https://f1.zevlo.net → smoke test:
-   - Live session loads (or replay session loads if off-season)
-   - All 20 drivers show as names immediately (no click required)
-   - Click a driver — telemetry updates, no network in DevTools
-   - Switch sessions — first paint <500ms from cache
-   - Scrub a replay — all panels reflect the new moment without network
-   - Agent chat — type a question, tokens stream back
-5. Once verified: delete `zevlo/f1-telemetry-dashboard` GitHub repo.
+### Phase 6.1 — WS custom domain fix
+- Added `api_mapping_key = "v1"` to `aws_apigatewayv2_api_mapping.ws` in `terraform/modules/api/main.tf`. Root mapping (no key) was rejecting all paths with 403 because API Gateway's `API_MAPPING_ONLY` routing mode only honours paths matching an api_mapping.
+- First terraform apply (in-place update) didn't fully take — had to `terraform taint 'module.api.aws_apigatewayv2_api_mapping.ws[0]'` and apply again to force-recreate the mapping with the new key. After recreation, `wss://ws.f1.zevlo.net/v1` connects cleanly.
+- Verified end-to-end: agent.ask via production WS URL returns streamed reply.
+
+### Phase 6.2 — Frontend env vars
+- Created `frontend/.env.production` with the live URLs (committed — the dashboard is public read-only, URLs aren't secret).
+- `npm run build` — bundle now has `VITE_API_BASE_URL=https://api.f1.zevlo.net/v1` and `VITE_WS_URL=wss://ws.f1.zevlo.net/v1` baked in (verified via grep on the produced JS).
+
+### Phase 6.3 — Manual S3 sync + CloudFront invalidation
+- `aws s3 sync frontend/dist/ s3://f1-telemetry-dev-frontend/ --delete` → 3 files, 632 KB.
+- `aws cloudfront create-invalidation --distribution-id E3QEYQF69Z3KCQ --paths '/*'` → completed in <60s.
+
+### Phase 6.4 — Smoke verification at https://f1.zevlo.net
+- `https://f1.zevlo.net/` → HTTP 200 (was 403)
+- `https://f1.zevlo.net/assets/index-*.js` → HTTP 200
+- `https://api.f1.zevlo.net/v1/sessions` → returns the seeded Austria 2026 session
+- `https://api.f1.zevlo.net/v1/sessions/11315/drivers` → 22 drivers with names + acronyms + teams
+- `wss://ws.f1.zevlo.net/v1?sessionId=11315` → connects, agent asks answer correctly ("RUS is leading, VER is P2")
+- Lambda unit tests: all 9 suites pass. Vitest: 17/17 pass. TypeScript strict + oxlint: clean.
+
+### Phase 6.5 — CI/CD workflow
+- Authored `.github/workflows/deploy.yml` mirroring v1's pattern: two sequential jobs (infra → frontend), OIDC role `github-oidc-f1-telemetry`, no static keys.
+- `infra` job: `terraform init` → `terraform plan -lock=false` → `terraform apply -auto-approve` on push to `main`.
+- `frontend` job (sequenced after infra): reads terraform outputs at runtime → `npm ci` → `vite build` with VITE env vars injected from outputs → `aws s3 sync` with immutable cache on hashed assets + must-revalidate on `index.html` → `aws cloudfront create-invalidation`.
+- Trigger paths: `terraform/**`, `lambdas/**`, `frontend/**`, `.github/workflows/deploy.yml`. PRs don't deploy.
+
+## Phase 7 — Delete old repo (PENDING — needs `delete_repo` scope)
+
+Attempted `gh repo delete zevlo/f1-telemetry-dashboard --yes` but the gh token's scopes (`gist, read:org, repo, workflow`) don't include `delete_repo`. Manual follow-up:
+
+```bash
+gh auth refresh -h github.com -s delete_repo
+gh repo delete zevlo/f1-telemetry-dashboard --yes
+```
+
+Phase 0 snapshot preserved at `/var/folders/z6/gvc0hbp90lg2hkn71stbn2xm0000gn/T/opencode/f1-v2-snapshot/` for emergency rollback reference. The local working tree at `/Users/za/projects/f1-telemetry-dashboard` can also be `rm -rf`'d once the user is confident v2 is stable.
 
 ## Phase 7 — Tests + polish (PENDING)
 

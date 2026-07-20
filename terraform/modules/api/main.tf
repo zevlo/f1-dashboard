@@ -1035,13 +1035,16 @@ resource "aws_apigatewayv2_domain_name" "ws" {
   tags = local.common_tags
 }
 
-# No api_mapping_key → root mapping. The stage name stays in the URL path
-# (wss://ws.<domain>/v1), matching the existing wss://<api>.execute-api.../v1.
+# api_mapping_key = "v1" maps /v1 on the custom domain to this stage, so the
+# URL is wss://ws.<domain>/v1 (matching the raw execute-api URL shape and
+# what's baked into the frontend env). Root mapping (no key) would only
+# serve wss://ws.<domain>/ — Phase 6.1 fix.
 resource "aws_apigatewayv2_api_mapping" "ws" {
-  count       = local.enable_ws_domain ? 1 : 0
-  api_id      = aws_apigatewayv2_api.ws.id
-  domain_name = aws_apigatewayv2_domain_name.ws[0].id
-  stage       = aws_apigatewayv2_stage.ws.id
+  count           = local.enable_ws_domain ? 1 : 0
+  api_id          = aws_apigatewayv2_api.ws.id
+  domain_name     = aws_apigatewayv2_domain_name.ws[0].id
+  stage           = aws_apigatewayv2_stage.ws.id
+  api_mapping_key = "v1"
 }
 
 resource "aws_route53_record" "ws" {
