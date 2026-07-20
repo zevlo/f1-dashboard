@@ -197,18 +197,49 @@ frontend/src/
 
 **Side quest:** Added `scripts/seed_session.py` — one-shot boto3 script that pulls a historical session from OpenF1 + writes to all 6 dev DDB tables. Used to seed Austria 2026 (1 session, 22 drivers, 499 positions, 1342 laps, 208 race-control events) so the frontend has data to demo against outside of live race weekends. Re-runnable: `python3 scripts/seed_session.py [session_key]`.
 
-## Phase 5 — AgentCore integration (PENDING)
+## Phase 5 — AgentCore / Bedrock integration (DONE 2026-07-20)
 
-1. Define AgentCore agent with Amazon Nova Pro via Terraform `agent` module.
-2. Define 5 tools in the agent spec — Lambda-backed (cleaner) preferred over inline DDB queries in `ws-agent`:
-   - `get_session(session_key)` → session metadata
-   - `get_standings(session_key)` → current positions (live) or at scrubTs (replay)
-   - `get_driver_laps(session_key, driver_number, [lap_range])` → lap times + sectors
-   - `get_telemetry_sample(session_key, driver_number, [ts])` → latest car_data sample
-   - `get_race_control(session_key, [since_ts])` → flags / incidents
-3. `ws-agent` Lambda uses `bedrock-agentcore` SDK `InvokeStream` API; pipes chunks to `apigatewaymanagementapi.post_to_connection(ConnectionId, {type: 'agent.token', ...})`.
-4. Frontend renders assistant message in chunks as tokens arrive.
-5. Conversation memory: in-memory per connectionId for v1 (lost on cold start). Promote to DDB `AgentSessions` table later if needed.
+Real Bedrock Nova Pro chat with telemetry-lookup tools, shipped via raw `bedrock-runtime converse_stream` (not full Bedrock AgentCore Runtime — simpler, gets the same UX for our 5-tool use case).
+
+**Decisions (locked in mini-interview):**
+- Agent backend: **Raw Bedrock Converse + tools** (not AgentCore Runtime — fewer moving parts, ships in one Lambda).
+- Tool implementation: **Inline DDB queries** in ws-agent Lambda (no separate per-tool Lambdas).
+- Conversation memory: **In-memory per connectionId** (no new AgentSessions table).
+
+**Implementation:**
+
+1. **ws-agent Lambda rewrite** (`lambdas/ws-agent/lambda_function.py`):
+   - 5 inline tools, each a Python function that queries DynamoDB directly:
+     - `get_session(session_key)` → session metadata
+     - `get_standings(session_key)` → latest position per driver, sorted P1..Pn
+     - `get_driver_laps(session_key, driver_number, [lap_start, lap_end])` → lap times + sectors + compound
+     - `get_telemetry_sample(session_key, driver_number)` → most recent car_data sample
+     - `get_race_control(session_key, [since])` → flags + incidents, newest first
+   - 5 tool specs (JSON Schema) handed to Bedrock via `toolConfig.tools`
+   - System prompt: race-engineer persona, concise technical radio voice, no chain-of-thought leakage
+   - `stream_assistant()` loop: calls `converse_stream`, forwards text deltas as `agent.token` events via `apigatewaymanagementapi.post_to_connection`, accumulates tool_use blocks, executes them, appends tool_result messages, loops. Capped at 5 tool rounds per `agent.ask`.
+   - In-memory history: `_conversations: dict[connectionId, messages]`, capped at 30 messages per connection. Cleared on disconnect (GoneException path) and on cold start.
+
+2. **Terraform IAM** (`terraform/modules/api/main.tf`):
+   - Bedrock statement updated: `bedrock:InvokeModelWithResponseStream` is the action that `converse_stream` actually checks against (despite the name). Kept `bedrock:Converse` + `bedrock:ConverseStream` + `bedrock:InvokeModel` too for future-proofing.
+   - New `TelemetryRead` statement: grants DDB read on all 6 telemetry tables to the ws-agent role (for the tools).
+   - ws-agent Lambda env extended with all 6 telemetry table names.
+
+3. **Default flipped:** `agent_enabled` var now defaults to `true` in `terraform/environments/dev/variables.tf`.
+
+4. **Tests:** 14 unit tests in `lambdas/ws-agent/test_handler.py` cover event parsing, stub path, all 5 tools (against a FakeTable DDB), history cap, and the AGENT_ENABLED=false branch.
+
+**End-to-end verification** (via `scripts/test_agent.py`):
+
+Connected to `wss://meaysn87r1.execute-api.us-east-1.amazonaws.com/v1?sessionId=11315` and asked real questions:
+
+- *"Who is leading?"* → streamed tokens, called `get_standings` tool, replied "Driver number 63 is currently leading the race."
+- *"Compare lap times of driver 1 and driver 4"* → called `get_driver_laps` for each, correctly noted "Driver 4 has no recorded laps in this session. Driver 1's average lap time is 73.244 seconds."
+- Multi-turn follow-up: *"Who is leading?"* → *"What is their fastest lap?"* → second turn used the in-memory conversation context to resolve "their" = driver 63, called `get_driver_laps`, replied "Driver number 63's fastest lap is 1:10.683".
+
+**Known follow-ups (deferred to Phase 6 polish):**
+- `<thinking>...</thinking>` tags still leak into streamed output despite system-prompt rule. Nova Pro's native reasoning format. Either filter server-side (buffer + strip) or live with the visibility.
+- WS custom domain `wss://ws.f1.zevlo.net/v1` returns HTTP 403 on the WebSocket handshake. Raw execute-api URL works fine. Phase 6 will fix the api_mapping (likely needs `api_mapping_key = "v1"` or remove stage from URL).
 
 ## Phase 6 — CI/CD + cutover (PENDING)
 

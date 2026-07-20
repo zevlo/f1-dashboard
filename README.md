@@ -116,7 +116,7 @@ WebSocket events (target):
 - [x] Phase 2 — Terraform: `state rm` ACM cert (Route 53 zone was already a data source), `destroy`, rebuild with `Drivers` table + new endpoints (162 added, 0 destroyed)
 - [x] Phase 3 — Lambdas: rewrote poller + api-drivers; added api-replay + ws-agent (stub); carried transformer/api-sessions/ws-connect/ws-disconnect/ws-push from v1
 - [x] Phase 4 — Frontend: React + Vite + TanStack Query + Zustand + Tailwind
-- [ ] Phase 5 — AgentCore integration (Amazon Nova Pro)
+- [x] Phase 5 — AgentCore integration (Amazon Nova Pro)
 - [ ] Phase 6 — Big-bang PR to main → CI apply → CloudFront invalidation → verify at https://f1.zevlo.net
 - [ ] Phase 7 — Delete old `zevlo/f1-telemetry-dashboard` repo
 

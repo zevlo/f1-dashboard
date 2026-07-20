@@ -750,7 +750,14 @@ resource "aws_lambda_function" "ws_agent" {
       CONNECTIONS_TABLE      = aws_dynamodb_table.connections.name
       AGENT_MODEL_ID         = var.agent_model_id
       AGENT_ENABLED          = tostring(var.agent_enabled)
-      LOG_LEVEL              = "INFO"
+      # Telemetry tables the agent can query via tools.
+      SESSIONS_TABLE     = var.table_names.sessions
+      DRIVERS_TABLE      = var.table_names.drivers
+      POSITIONS_TABLE    = var.table_names.positions
+      LAPS_TABLE         = var.table_names.laps
+      RACE_CONTROL_TABLE = var.table_names.race_control
+      CAR_DATA_TABLE     = var.table_names.car_data
+      LOG_LEVEL          = "INFO"
     }
   }
 
@@ -927,13 +934,35 @@ data "aws_iam_policy_document" "ws_agent_permissions" {
     ]
   }
 
-  # Bedrock model invoke (only honored when agent_enabled=true).
-  # Scoped to the specific model ARN; wildcard region/account because
-  # Bedrock model ARNs are account-scoped in us-east-1.
+  # Telemetry read for the 5 race-engineer tools (get_session, get_standings,
+  # get_driver_laps, get_telemetry_sample, get_race_control).
   statement {
-    sid       = "BedrockInvoke"
-    effect    = "Allow"
-    actions   = ["bedrock:InvokeModelWithResponseStream"]
+    sid     = "TelemetryRead"
+    effect  = "Allow"
+    actions = ["dynamodb:GetItem", "dynamodb:Query"]
+    resources = [
+      var.table_arns.sessions,
+      var.table_arns.drivers,
+      var.table_arns.positions,
+      var.table_arns.laps,
+      var.table_arns.race_control,
+      var.table_arns.car_data,
+    ]
+  }
+
+  # Bedrock Converse API (Nova Pro) — used by ws-agent when agent_enabled=true.
+  # Note: the converse_stream boto3 call maps to bedrock:InvokeModelWithResponseStream
+  # in IAM, not bedrock:ConverseStream. Keep both actions so future switches
+  # to non-streaming Converse don't silently break.
+  statement {
+    sid = "BedrockConverse"
+    effect = "Allow"
+    actions = [
+      "bedrock:Converse",
+      "bedrock:ConverseStream",
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream",
+    ]
     resources = ["arn:aws:bedrock:*::foundation-model/${var.agent_model_id}"]
   }
 }

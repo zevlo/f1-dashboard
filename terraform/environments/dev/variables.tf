@@ -67,9 +67,9 @@ variable "replay_speed" {
 }
 
 variable "agent_enabled" {
-  description = "When true, the ws-agent Lambda invokes Bedrock for chat replies (charges apply). When false (Phase 2 default), it returns a stubbed reply without calling Bedrock. Flip to true in Phase 5 once AgentCore is wired."
+  description = "When true, the ws-agent Lambda invokes Bedrock for chat replies (charges apply). When false, returns a stubbed reply without calling Bedrock. Flipped to true in Phase 5 once the Bedrock Converse loop + 5 telemetry tools were wired."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "agent_model_id" {
