@@ -157,13 +157,67 @@ def from_dynamo(item):
     return out
 
 
+# ----------------------------------------------------------------------------
+# Driver registry — one DynamoDB Query on the Drivers table per agent.ask
+# invocation, shared across all tools. Provides the acronym/full_name lookup
+# so tool responses (and the model's replies) can reference drivers by name
+# instead of just driver_number.
+# ----------------------------------------------------------------------------
+def load_driver_registry(session_key):
+    """Return dict[driver_number_int, {name_acronym, full_name, team_name, team_colour}].
+
+    Empty dict on miss / error — tools fall back to number-only responses.
+    """
+    registry = {}
+    if not session_key or not TABLES.get("drivers"):
+        return registry
+    try:
+        r = ddb().Table(TABLES["drivers"]).query(
+            KeyConditionExpression="session_key = :sk",
+            ExpressionAttributeValues={":sk": str(session_key)},
+        )
+    except Exception:
+        logger.exception("driver registry load failed for session_key=%s", session_key)
+        return registry
+    for item in r.get("Items", []):
+        d = from_dynamo(item)
+        dn = d.get("driver_number")
+        if dn is None:
+            continue
+        try:
+            dn_int = int(dn)
+        except (TypeError, ValueError):
+            continue
+        registry[dn_int] = {
+            "name_acronym": d.get("name_acronym") or "",
+            "full_name": d.get("full_name") or "",
+            "team_name": d.get("team_name") or "",
+            "team_colour": d.get("team_colour") or "",
+        }
+    return registry
+
+
+def driver_view(registry, driver_number):
+    """Look up a driver's name fields from the registry. Returns a dict with
+    name_acronym/full_name/team_name (empty strings if not found)."""
+    return registry.get(int(driver_number), {
+        "name_acronym": "",
+        "full_name": "",
+        "team_name": "",
+        "team_colour": "",
+    })
+
+
 # ============================================================================
 # TOOLS — 5 read-only telemetry lookups.
 # Each returns a dict that gets JSON-serialised into the tool_result content.
 # ============================================================================
 
-def tool_get_session(args):
-    """get_session: session metadata for one session_key."""
+def tool_get_session(args, registry):
+    """get_session: session metadata for one session_key.
+
+    `registry` is unused — accepted for dispatch consistency with other tools.
+    """
     sk = str(args.get("session_key", "")).strip()
     if not sk:
         return {"error": "session_key is required"}
@@ -174,10 +228,11 @@ def tool_get_session(args):
     return {"session": from_dynamo(item)}
 
 
-def tool_get_standings(args):
+def tool_get_standings(args, registry):
     """get_standings: latest position per driver for a session.
 
-    Returns an array of {driver_number, position, date} sorted P1..Pn.
+    Returns an array of {driver_number, position, name_acronym, full_name,
+    team_name, ts} sorted P1..Pn.
     """
     sk = str(args.get("session_key", "")).strip()
     if not sk:
@@ -198,22 +253,29 @@ def tool_get_standings(args):
         if prev is None or str(d.get("date", "")) > str(prev.get("date", "")):
             latest[dn] = d
     standings = sorted(latest.values(), key=lambda x: x.get("position", 999))
-    # Slim each row for token efficiency.
-    slim = [
-        {
+    # Slim each row for token efficiency. Include name fields so the agent can
+    # reply with "NOR is leading" instead of "Driver number 1".
+    slim = []
+    for row in standings[:ROWS_PER_QUERY]:
+        dn = row.get("driver_number")
+        drv = driver_view(registry, dn) if dn is not None else {}
+        slim.append({
             "position": row.get("position"),
-            "driver_number": row.get("driver_number"),
+            "driver_number": dn,
+            "name_acronym": drv.get("name_acronym"),
+            "full_name": drv.get("full_name"),
+            "team_name": drv.get("team_name"),
             "ts": row.get("date"),
-        }
-        for row in standings[:ROWS_PER_QUERY]
-    ]
+        })
     return {"standings": slim}
 
 
-def tool_get_driver_laps(args):
+def tool_get_driver_laps(args, registry):
     """get_driver_laps: lap times + sectors for one driver.
 
-    Optional lap_start/lap_end range; defaults to all laps.
+    Optional lap_start/lap_end range; defaults to all laps. Response includes
+    the driver's name_acronym + full_name + team_name so the agent can refer
+    to them by name in the reply.
     """
     sk = str(args.get("session_key", "")).strip()
     driver_number = args.get("driver_number")
@@ -239,8 +301,12 @@ def tool_get_driver_laps(args):
     if lap_end is not None:
         laps = [l for l in laps if l.get("lap_number", 0) <= int(lap_end)]
 
+    drv = driver_view(registry, driver_number)
     return {
         "driver_number": driver_number,
+        "name_acronym": drv.get("name_acronym"),
+        "full_name": drv.get("full_name"),
+        "team_name": drv.get("team_name"),
         "lap_count": len(laps),
         "laps": [
             {
@@ -256,10 +322,11 @@ def tool_get_driver_laps(args):
     }
 
 
-def tool_get_telemetry_sample(args):
+def tool_get_telemetry_sample(args, registry):
     """get_telemetry_sample: latest car_data sample for one driver.
 
     Returns speed/throttle/brake/gear/rpm/drs at the most recent timestamp.
+    Response includes the driver's name so the agent can refer to them by name.
     """
     sk = str(args.get("session_key", "")).strip()
     driver_number = args.get("driver_number")
@@ -279,15 +346,31 @@ def tool_get_telemetry_sample(args):
         ScanIndexForward=False,
     )
     items = r.get("Items", [])
+    drv = driver_view(registry, driver_number)
     if not items:
-        return {"driver_number": driver_number, "telemetry": None, "note": "no car_data samples"}
-    return {"driver_number": driver_number, "telemetry": from_dynamo(items[0])}
+        return {
+            "driver_number": driver_number,
+            "name_acronym": drv.get("name_acronym"),
+            "full_name": drv.get("full_name"),
+            "team_name": drv.get("team_name"),
+            "telemetry": None,
+            "note": "no car_data samples",
+        }
+    return {
+        "driver_number": driver_number,
+        "name_acronym": drv.get("name_acronym"),
+        "full_name": drv.get("full_name"),
+        "team_name": drv.get("team_name"),
+        "telemetry": from_dynamo(items[0]),
+    }
 
 
-def tool_get_race_control(args):
+def tool_get_race_control(args, registry):
     """get_race_control: flags + incidents for a session, newest first.
 
-    Optional `since` filters to events after the given ISO timestamp.
+    Optional `since` filters to events after the given ISO timestamp. Events
+    with a driver_number include name_acronym when the driver is in the
+    registry.
     """
     sk = str(args.get("session_key", "")).strip()
     if not sk:
@@ -302,17 +385,21 @@ def tool_get_race_control(args):
     since = args.get("since")
     if since:
         events = [e for e in events if str(e.get("timestamp", "")) > str(since)]
-    # Strip session_key from each row (redundant in this context).
-    slim = [
-        {
+    # Strip session_key from each row (redundant in this context). Include
+    # name_acronym for events scoped to a driver.
+    slim = []
+    for e in events:
+        dn = e.get("driver_number")
+        row = {
             "timestamp": e.get("timestamp"),
             "category": e.get("category"),
             "flag": e.get("flag"),
             "message": e.get("message"),
-            "driver_number": e.get("driver_number"),
+            "driver_number": dn,
         }
-        for e in events
-    ]
+        if dn is not None:
+            row["name_acronym"] = driver_view(registry, dn).get("name_acronym")
+        slim.append(row)
     return {"events": slim}
 
 
@@ -457,19 +544,24 @@ Rules:
    is one tool call away.
 2. Prefer batched, specific questions. If you need both standings and a
    driver's laps, call both tools in one assistant turn.
-3. When the user mentions a driver by name (e.g. "VER", "Verstappen", "Max"),
-   resolve to their driver_number using context from get_standings if needed.
-4. Numbers are sacred. Quote lap times to 3 decimal places, speeds as integers.
+3. ALWAYS refer to drivers by their 3-letter acronym (e.g. VER, NOR, RUS, HAM)
+   in replies. NEVER say "Driver number X" — race engineers don't talk like
+   that. Tool responses include name_acronym for every driver; use it.
+4. If the user mentions a driver by name (e.g. "Verstappen", "Max", "VER")
+   and you don't already know their driver_number from prior tool results,
+   call get_standings first to resolve the acronym to a driver_number before
+   calling per-driver tools like get_driver_laps or get_telemetry_sample.
+5. Numbers are sacred. Quote lap times to 3 decimal places, speeds as integers.
    Never round, never invent.
-5. If a tool returns empty results, say so plainly — don't make up data.
-6. For comparisons ("who was faster on sector 2"), do the math yourself from
-   the tool results. Show the delta.
-7. Keep replies under 4 sentences unless the user asks for detail. Race
+6. If a tool returns empty results, say so plainly — don't make up data.
+7. For comparisons ("who was faster on sector 2"), do the math yourself from
+   the tool results. Show the delta. Use acronyms for both drivers.
+8. Keep replies under 4 sentences unless the user asks for detail. Race
    engineers speak in bursts.
-8. Don't refer to "tools" or "APIs" or "calls" — you "checked the timing
+9. Don't refer to "tools" or "APIs" or "calls" — you "checked the timing
    tower" or "pulled the lap chart" or "looked at the most recent sample".
-9. Do NOT wrap internal reasoning in <thinking> or <reasoning> tags. Do NOT
-   reveal chain-of-thought. Respond directly with the answer.
+10. Do NOT wrap internal reasoning in <thinking> or <reasoning> tags. Do NOT
+    reveal chain-of-thought. Respond directly with the answer.
 
 The current session_key is injected at the start of each user turn by the
 runtime. Use that session_key in tool calls unless the user explicitly
@@ -480,13 +572,14 @@ asks about a different session."""
 # Converse loop
 # ============================================================================
 
-def stream_assistant(connection_id, message_id, messages):
+def stream_assistant(connection_id, message_id, messages, registry):
     """Call bedrock converse_stream, forward text tokens to the client, and
     accumulate any tool_use blocks. Returns the assistant message in the
     Bedrock message format (role + content blocks).
 
     Loops through tool round-trips: if the assistant emitted tool_use, we
-    execute each tool, append tool_result messages, and call again.
+    execute each tool (with the driver registry so responses include names),
+    append tool_result messages, and call again.
     """
     rounds = 0
     while True:
@@ -591,7 +684,7 @@ def stream_assistant(connection_id, message_id, messages):
                 result = {"error": f"unknown tool {t['name']}"}
             else:
                 try:
-                    result = fn(t["input"])
+                    result = fn(t["input"], registry)
                 except Exception as e:
                     logger.exception("tool %s failed", t["name"])
                     result = {"error": f"{type(e).__name__}: {e}"}
@@ -636,6 +729,16 @@ def run_bedrock(connection_id, text, session_key, driver_number):
     # turn (with runtime context injected) and run the loop.
     history = get_history(connection_id)
 
+    # Always load the driver registry once per agent.ask — gives every tool
+    # access to name_acronym + full_name for the session's 20 drivers without
+    # each tool re-querying. Cheap (~10ms, one DDB Query, ~20 rows).
+    registry = load_driver_registry(session_key)
+    if registry:
+        logger.info(
+            "loaded driver registry: %d drivers for session %s",
+            len(registry), session_key,
+        )
+
     # Construct the user message. Include session context so the model can
     # call tools without the user repeating the session_key each turn.
     user_text = text
@@ -643,6 +746,11 @@ def run_bedrock(connection_id, text, session_key, driver_number):
         ctx = f"[context] session_key={session_key}"
         if driver_number is not None:
             ctx += f", focused_driver_number={driver_number}"
+            # Resolve the focused driver's acronym so the model knows who
+            # the user is currently looking at without an extra tool call.
+            drv = registry.get(int(driver_number)) if registry else None
+            if drv and drv.get("name_acronym"):
+                ctx += f", focused_driver_acronym={drv['name_acronym']}"
         user_text = f"{ctx}\n[user] {text}"
 
     user_msg = {"role": "user", "content": [{"text": user_text}]}
@@ -651,7 +759,7 @@ def run_bedrock(connection_id, text, session_key, driver_number):
 
     message_id = f"m-{int(time.time() * 1000)}"
     try:
-        stream_assistant(connection_id, message_id, messages)
+        stream_assistant(connection_id, message_id, messages, registry)
     except Exception:
         # On failure, pop the user message we just appended so a retry
         # doesn't carry a dangling turn.

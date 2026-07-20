@@ -236,7 +236,15 @@ export function App() {
           </div>
         </div>
 
-        <AgentChatPanel send={send} wsReady={wsReady} />
+        <AgentChatPanel
+          send={send}
+          wsReady={wsReady}
+          selectedDriverAcronym={
+            selectedDriverNumber != null
+              ? drivers.get(selectedDriverNumber)?.name_acronym ?? null
+              : null
+          }
+        />
       </main>
 
       <ReplayControls latestLap={currentLap} />

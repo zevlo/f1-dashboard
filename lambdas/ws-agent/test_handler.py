@@ -87,8 +87,16 @@ def test_parse_event_handles_bad_json():
 
 
 # ---------------------------------------------------------------------------
-# Tool execution (DDB mocked)
+# Tool execution (DDB mocked) — each tool now takes (args, registry).
+# registry is a dict[driver_number_int, {name_acronym, full_name, team_name,
+# team_colour}]. Tools include name fields in their responses.
 # ---------------------------------------------------------------------------
+REGISTRY = {
+    1: {"name_acronym": "NOR", "full_name": "Lando Norris", "team_name": "McLaren", "team_colour": "FF8000"},
+    2: {"name_acronym": "RUS", "full_name": "George Russell", "team_name": "Mercedes", "team_colour": "27F4D2"},
+}
+
+
 class FakeTable:
     def __init__(self, items):
         self._items = items
@@ -129,6 +137,32 @@ def install_tables(tables):
     lf._DDB = FakeDynamo(tables)
 
 
+def test_load_driver_registry():
+    lf.TABLES["drivers"] = "drivers"
+    install_tables({
+        "drivers": FakeTable([
+            {"session_key": "11315", "driver_number": Decimal(1),
+             "name_acronym": "NOR", "full_name": "Lando Norris",
+             "team_name": "McLaren", "team_colour": "FF8000"},
+            {"session_key": "11315", "driver_number": Decimal(2),
+             "name_acronym": "RUS", "full_name": "George Russell",
+             "team_name": "Mercedes", "team_colour": "27F4D2"},
+        ]),
+    })
+    reg = lf.load_driver_registry("11315")
+    assert reg[1]["name_acronym"] == "NOR"
+    assert reg[2]["full_name"] == "George Russell"
+    assert len(reg) == 2
+    print("  load_driver_registry OK")
+
+
+def test_load_driver_registry_empty_when_table_missing():
+    lf.TABLES.pop("drivers", None)
+    reg = lf.load_driver_registry("11315")
+    assert reg == {}
+    print("  load_driver_registry_empty_when_table_missing OK")
+
+
 def test_tool_get_session_found():
     lf.TABLES["sessions"] = "sessions"
     install_tables({
@@ -137,7 +171,7 @@ def test_tool_get_session_found():
              "year": Decimal(2026)},
         ]),
     })
-    r = lf.tool_get_session({"session_key": "11315"})
+    r = lf.tool_get_session({"session_key": "11315"}, {})
     assert r["session"]["session_name"] == "Race"
     assert r["session"]["year"] == 2026  # Decimal coerced to int
     print("  tool_get_session_found OK")
@@ -146,12 +180,12 @@ def test_tool_get_session_found():
 def test_tool_get_session_missing():
     lf.TABLES["sessions"] = "sessions"
     install_tables({"sessions": FakeTable([])})
-    r = lf.tool_get_session({"session_key": "nope"})
+    r = lf.tool_get_session({"session_key": "nope"}, {})
     assert "error" in r
     print("  tool_get_session_missing OK")
 
 
-def test_tool_get_standings_returns_latest_per_driver():
+def test_tool_get_standings_returns_latest_per_driver_with_names():
     lf.TABLES["positions"] = "positions"
     install_tables({
         "positions": FakeTable([
@@ -165,23 +199,40 @@ def test_tool_get_standings_returns_latest_per_driver():
              "date": "2026-01-01T00:00:05"},
         ]),
     })
-    r = lf.tool_get_standings({"session_key": "1"})
+    r = lf.tool_get_standings({"session_key": "1"}, REGISTRY)
     # Driver 2 should be P1 (latest sample), Driver 1 P2.
     assert r["standings"][0]["driver_number"] == 2
     assert r["standings"][0]["position"] == 1
+    assert r["standings"][0]["name_acronym"] == "RUS"  # ← name pulled from registry
+    assert r["standings"][0]["full_name"] == "George Russell"
     assert r["standings"][1]["driver_number"] == 1
-    print("  tool_get_standings_returns_latest_per_driver OK")
+    assert r["standings"][1]["name_acronym"] == "NOR"
+    print("  tool_get_standings_returns_latest_per_driver_with_names OK")
+
+
+def test_tool_get_standings_without_registry_falls_back_gracefully():
+    lf.TABLES["positions"] = "positions"
+    install_tables({
+        "positions": FakeTable([
+            {"session_key": "1", "driver_number": Decimal(1), "position": Decimal(1),
+             "date": "2026-01-01T00:00:00"},
+        ]),
+    })
+    r = lf.tool_get_standings({"session_key": "1"}, {})  # empty registry
+    assert r["standings"][0]["driver_number"] == 1
+    assert r["standings"][0]["name_acronym"] == ""  # falls back to empty string
+    print("  tool_get_standings_without_registry_falls_back_gracefully OK")
 
 
 def test_tool_get_driver_laps_invalid_driver():
     lf.TABLES["laps"] = "laps"
     install_tables({"laps": FakeTable([])})
-    r = lf.tool_get_driver_laps({"session_key": "1", "driver_number": "abc"})
+    r = lf.tool_get_driver_laps({"session_key": "1", "driver_number": "abc"}, REGISTRY)
     assert "error" in r
     print("  tool_get_driver_laps_invalid_driver OK")
 
 
-def test_tool_get_driver_laps_with_range():
+def test_tool_get_driver_laps_with_range_and_name():
     lf.TABLES["laps"] = "laps"
     install_tables({
         "laps": FakeTable([
@@ -190,14 +241,17 @@ def test_tool_get_driver_laps_with_range():
             {"session_driver": "1#1", "lap_number": Decimal(3), "lap_duration": Decimal(90.8)},
         ]),
     })
-    r = lf.tool_get_driver_laps({"session_key": "1", "driver_number": 1, "lap_start": 2})
+    r = lf.tool_get_driver_laps({"session_key": "1", "driver_number": 1, "lap_start": 2}, REGISTRY)
     assert r["driver_number"] == 1
+    assert r["name_acronym"] == "NOR"  # ← name from registry
+    assert r["full_name"] == "Lando Norris"
+    assert r["team_name"] == "McLaren"
     assert r["lap_count"] == 2
     assert r["laps"][0]["lap_number"] == 2
-    print("  tool_get_driver_laps_with_range OK")
+    print("  tool_get_driver_laps_with_range_and_name OK")
 
 
-def test_tool_get_telemetry_sample_returns_latest():
+def test_tool_get_telemetry_sample_returns_latest_with_name():
     lf.TABLES["car_data"] = "car_data"
     install_tables({
         "car_data": FakeTable([
@@ -205,11 +259,45 @@ def test_tool_get_telemetry_sample_returns_latest():
             {"session_driver": "1#1", "date": "2026-01-01T00:00:05", "speed": Decimal(312)},
         ]),
     })
-    r = lf.tool_get_telemetry_sample({"session_key": "1", "driver_number": 1})
+    r = lf.tool_get_telemetry_sample({"session_key": "1", "driver_number": 1}, REGISTRY)
     # FakeTable honours ScanIndexForward=False then applies Limit=1, so the
     # most recent sample (312) is what the tool returns.
     assert r["telemetry"]["speed"] == 312
-    print("  tool_get_telemetry_sample_returns_latest OK")
+    assert r["name_acronym"] == "NOR"  # ← name from registry
+    assert r["full_name"] == "Lando Norris"
+    print("  tool_get_telemetry_sample_returns_latest_with_name OK")
+
+
+def test_tool_get_telemetry_sample_no_data_still_has_name():
+    lf.TABLES["car_data"] = "car_data"
+    install_tables({"car_data": FakeTable([])})
+    r = lf.tool_get_telemetry_sample({"session_key": "1", "driver_number": 1}, REGISTRY)
+    assert r["telemetry"] is None
+    assert r["name_acronym"] == "NOR"  # name present even when no data
+    print("  tool_get_telemetry_sample_no_data_still_has_name OK")
+
+
+def test_tool_get_race_control_includes_driver_acronym():
+    lf.TABLES["race_control"] = "race_control"
+    install_tables({
+        "race_control": FakeTable([
+            {"session_key": "1", "timestamp": "2026-01-01T00:00:00", "flag": "GREEN", "message": "Go"},
+            {"session_key": "1", "timestamp": "2026-01-01T00:30:00", "flag": "YELLOW",
+             "message": "Slow", "driver_number": Decimal(1)},
+            {"session_key": "1", "timestamp": "2026-01-01T01:00:00", "flag": "RED", "message": "Stop"},
+        ]),
+    })
+    r = lf.tool_get_race_control({"session_key": "1"}, REGISTRY)
+    flags = [e["flag"] for e in r["events"]]
+    assert "RED" in flags
+    assert "GREEN" in flags  # no `since` filter; all events returned
+    # The yellow flag event has driver_number=1; should include name_acronym
+    yellow = [e for e in r["events"] if e["flag"] == "YELLOW"][0]
+    assert yellow["name_acronym"] == "NOR"  # ← resolved from registry
+    # Events without driver_number should NOT have a name_acronym key
+    red = [e for e in r["events"] if e["flag"] == "RED"][0]
+    assert "name_acronym" not in red
+    print("  tool_get_race_control_includes_driver_acronym OK")
 
 
 def test_tool_get_race_control_filters_since():
@@ -221,7 +309,7 @@ def test_tool_get_race_control_filters_since():
             {"session_key": "1", "timestamp": "2026-01-01T01:00:00", "flag": "RED", "message": "Stop"},
         ]),
     })
-    r = lf.tool_get_race_control({"session_key": "1", "since": "2026-01-01T00:30:01"})
+    r = lf.tool_get_race_control({"session_key": "1", "since": "2026-01-01T00:30:01"}, {})
     flags = [e["flag"] for e in r["events"]]
     assert "RED" in flags
     assert "GREEN" not in flags

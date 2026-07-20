@@ -9,6 +9,8 @@ interface AgentChatPanelProps {
   send: (payload: unknown) => boolean
   // Whether the WS connection is open.
   wsReady: boolean
+  // Acronym of the focused driver (e.g. "VER"); null when none focused.
+  selectedDriverAcronym: string | null
 }
 
 const SUGGESTED_PROMPTS = [
@@ -18,7 +20,7 @@ const SUGGESTED_PROMPTS = [
   'Which driver has the fastest lap?',
 ]
 
-export function AgentChatPanel({ send, wsReady }: AgentChatPanelProps) {
+export function AgentChatPanel({ send, wsReady, selectedDriverAcronym }: AgentChatPanelProps) {
   const sessionKey = useSessionStore((s) => s.sessionKey)
   const mode = useSessionStore((s) => s.mode)
   const selectedDriverNumber = useDriverStore((s) => s.selectedDriverNumber)
@@ -85,7 +87,7 @@ export function AgentChatPanel({ send, wsReady }: AgentChatPanelProps) {
         sessionKey ? (
           <span className="font-mono">
             {sessionKey}
-            {selectedDriverNumber != null ? ` · #${selectedDriverNumber}` : ''}
+            {selectedDriverAcronym ? ` · ${selectedDriverAcronym}` : ''}
           </span>
         ) : null
       }

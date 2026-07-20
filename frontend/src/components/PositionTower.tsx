@@ -88,16 +88,14 @@ export function PositionTower({
                   style={{ backgroundColor: teamColor }}
                   aria-hidden
                 />
-                {/* Driver number + name */}
+                {/* Driver acronym (primary identifier) + team name (muted) */}
                 <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                  <span className="tnum text-[10px] text-zinc-500">#{row.driver_number}</span>
-                  <span className="truncate text-xs font-medium text-zinc-100">
+                  <span className="truncate text-xs font-semibold uppercase tracking-wide text-zinc-100">
                     {row.driver.name_acronym || row.driver.full_name}
                   </span>
-                </span>
-                {/* Team abbreviation */}
-                <span className="truncate text-[10px] text-zinc-500">
-                  {row.driver.team_name}
+                  <span className="truncate text-[10px] text-zinc-500">
+                    {row.driver.team_name}
+                  </span>
                 </span>
                 {/* Comparison badge */}
                 {isComparison && (

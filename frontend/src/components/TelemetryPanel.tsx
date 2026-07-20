@@ -77,7 +77,9 @@ export function TelemetryPanel({
               className="inline-block h-2 w-2 rounded-sm"
               style={{ backgroundColor: teamColor }}
             />
-            <span className="font-mono">#{driver.driver_number}</span>
+            <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">
+              {driver.name_acronym || driver.full_name}
+            </span>
           </span>
         ) : null
       }
