@@ -1,0 +1,1 @@
+# No external deps — uses boto3 (provided in the Lambda runtime) and urllib.

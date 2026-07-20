@@ -77,44 +77,68 @@ aws iam update-assume-role-policy \
   --policy-document file://<path-to-BEFORE-phase1.5.json>
 ```
 
-## Phase 2 — Terraform (PENDING)
+## Phase 2 — Terraform (DONE 2026-07-20)
 
-**Order matters.** Run all of this from the OLD repo's `terraform/environments/dev/` (since state currently lives there):
+Applied 2026-07-20. **162 added, 0 changed, 0 destroyed.**
 
-1. `terraform init` (refresh local .terraform)
-2. Orphan the parent zone + ACM cert (so destroy doesn't delete them):
-   ```
-   terraform state rm module.dns.aws_route53_zone.parent
-   terraform state rm module.dns.aws_acm_certificate.this
-   terraform state rm module.dns.aws_acm_certificate_validation.this
-   ```
-3. `terraform destroy -auto-approve` (removes everything else — DDB tables, lambdas, APIs, CloudFront, frontend bucket)
-4. Copy the now-pruned tfstate into the new repo (or rely on remote S3 state — `terraform init` in the new repo will pull it)
+Sub-phases executed:
 
-In the new repo:
-5. Author new Terraform: same module structure as v1 + new `agent` module + `Drivers` table in storage module + new REST routes in api module + `ws-agent` Lambda route in api module + `api-replay` Lambda in api module.
-6. Import the preserved zone + cert:
-   ```
-   terraform import module.dns.aws_route53_zone.parent Z065948732114TULELWJE
-   terraform import module.dns.aws_acm_certificate.this 'arn:aws:acm:us-east-1:746669194590:certificate/3a6f873e-da3c-4f8b-8007-73ff60746916'
-   ```
-7. `terraform plan` — should show only adds (no changes to imported resources). Manually review.
-8. `terraform apply` — recreates everything clean.
+### Phase 2a — Destroy v1
+1. `terraform init` in v1 repo (refresh).
+2. `terraform state rm module.dns.aws_acm_certificate.this` + `module.dns.aws_acm_certificate_validation.this` (Route 53 zone was already a `data` source, no rm needed). ACM cert + validation orphaned in TF state but preserved in AWS.
+3. `terraform destroy -auto-approve` removed everything else (5 DDB tables, 7 Lambdas, REST+WS APIs, CloudFront, S3 frontend bucket, IAM roles, CloudWatch dashboards, SNS topic, Kinesis, SQS DLQs, EventBridge rule). Hit one expected failure on the S3 frontend bucket (`force_destroy=true` was an uncommitted v1 change never applied) — manually purged all versions + delete markers via `aws s3api`, then `terraform state rm` the bucket entry.
+4. Verified: all v1 compute/storage/networking GONE; Route 53 zone `zevlo.net` + ACM cert `f1.zevlo.net` (still ISSUED) preserved.
 
-## Phase 3 — Lambdas (PENDING)
+### Phase 2b — Rebuild v2
+1. Copied v1 `terraform/` + `lambdas/` to new repo as baseline (preserves uncommitted v1 learnings: `poller_enabled` var + `force_destroy=true` on frontend bucket).
+2. Modified modules for v2:
+   - **storage**: added `aws_dynamodb_table.drivers` (PK `session_key`, SK `driver_number`, no stream — metadata-only). Outputs include it in `table_names` + `table_arns`.
+   - **ingestion**: removed SSM replay cursor resource + IAM statement. Removed `REPLAY_SESSION_KEY` / `REPLAY_SPEED` / `CURSOR_PARAM_NAME` Lambda env vars. Added `drivers_table_{name,arn}` inputs + `DriversWrite` IAM statement. Poller Lambda now bulk-upserts all 20 drivers via BatchWriteItem on session discovery. Replay vars kept as deprecated back-compat defaults (no behavior).
+   - **api**: added 2 REST routes (`/sessions/{sessionId}/drivers`, `/sessions/{sessionId}/replay`) and 2 new Lambdas (`api-replay`, `ws-agent`). Updated `api-drivers` to handle both bulk DDB read + per-driver OpenF1 proxy. Added `agent_ask` route on WS API. Added `agent_enabled` + `agent_model_id` vars. ws-agent IAM grants Bedrock invoke + execute-api:ManageConnections + Connections read.
+   - **monitoring**: `lambda_function_names` map extended with `api_replay` + `ws_agent` — no module code changes (it already iterates dynamically).
+   - **environments/dev**: wired new ingestion inputs (`drivers_table_{name,arn}` from `module.storage`), new api inputs (`agent_enabled`, `agent_model_id`), new monitoring lambda entries, new outputs.
+3. Updated all 4 v2 Lambdas:
+   - **poller**: stripped replay logic entirely (cursor, SSM client, `run_replay`); added `upsert_drivers()` that fetches `/drivers?session_key=X` and BatchWriteItem's into the Drivers table (idempotent PutRequest).
+   - **api-drivers**: rewrote as dual-route dispatcher. `GET /sessions/{key}/drivers` queries DDB; `GET /drivers/{n}` proxies OpenF1.
+   - **api-replay** (NEW): bulk fetch session+drivers+positions+laps+race_control in one payload. Loops over driver numbers from Drivers table to query Laps (composite PK). CarData intentionally excluded (too large).
+   - **ws-agent** (NEW, STUB): handles `agent.ask` action. Streams stubbed reply token-by-token via `apigatewaymanagementapi.post_to_connection` to mimic Bedrock stream shape. `run_bedrock()` raises NotImplementedError until Phase 5.
+4. Ran unit tests (`python3 lambdas/*/test_handler.py`) — all 5 lambda suites pass (transformer, api-sessions, api-drivers, api-replay, ws-agent, ws-connect, ws-disconnect, ws-push).
+5. `terraform init` (pulled empty state from S3) + `terraform validate` (passed).
+6. Imported preserved resources into new state:
+   - `terraform import module.dns.aws_acm_certificate.this 'arn:aws:acm:us-east-1:746669194590:certificate/3a6f873e-da3c-4f8b-8007-73ff60746916'`
+   - (Route 53 zone is a data source; nothing to import. ACM cert validation resource can't be imported — AWS provider limitation; harmless since cert is already ISSUED, the waiter resolves immediately.)
+7. `terraform plan` — **162 to add, 0 to change, 0 to destroy** (confirmed cert preserved).
+8. `terraform apply -auto-approve` — all 162 resources created. CloudFront distribution `E3QEYQF69Z3KCQ`. REST API `czksalpwq7`.
+9. Smoke-tested:
+   - `GET https://api.f1.zevlo.net/v1/sessions` → `{"items": [], "nextCursor": null}` (empty DDB, expected)
+   - `GET /sessions/9999/drivers` → `[]` (new bulk endpoint works)
+   - `GET /sessions/9999/replay` → `{"error": "session 9999 not found"}` (new bulk endpoint works)
+   - `GET /drivers/1` → Max Verstappen metadata (legacy OpenF1 proxy works)
+   - `https://f1.zevlo.net` → HTTP 403 from CloudFront (expected — frontend bucket is empty, Phase 4 deploys the build)
+   - Invoked poller Lambda manually → `{"mode": "idle", "pushed": 0}` (no live F1 session currently, as expected off-season)
 
-9 Lambdas total. v1 contracts documented in `docs/f1-telemetry-dashboard-v1-reference.md`.
+**Live outputs captured:**
+- `cloudfront_distribution_id = E3QEYQF69Z3KCQ`
+- `api_rest_api_id = czksalpwq7`
+- 6 DDB tables: car_data, drivers, laps, positions, race_control, sessions
+- 9 Lambda functions: poller, transformer, api-sessions, api-drivers, api-replay, ws-connect, ws-disconnect, ws-push, ws-agent
 
-| Lambda | Responsibility | Notes vs v1 |
+Old `zevlo/f1-telemetry-dashboard` repo still exists as a reference; will be deleted in Phase 7 after v2 frontend verifies.
+
+## Phase 3 — Lambdas (DONE 2026-07-20)
+
+All 9 Lambdas shipped as part of Phase 2 (the Terraform `archive_file` data sources package the Lambda source, so they deploy together). Phase 3 work effectively merged into Phase 2.
+
+| Lambda | Status | Notes |
 |---|---|---|
-| `poller` | **Live mode only.** EventBridge 60s trigger; auto-discover active session; loop internally at ~5s. On session discovery, also fetch + upsert all 20 drivers to `Drivers` table. | Drop `replay_session_key`, `replay_speed`, SSM cursor logic entirely. |
-| `transformer` | Kinesis consumer, normalize, idempotent DDB put across 5 telemetry tables | Mostly unchanged from v1 (keep the conditional-put idempotency). |
-| `api-sessions` | `GET /sessions`, `GET /sessions/{key}` | Unchanged contract. |
-| `api-drivers` | `GET /sessions/{key}/drivers` — bulk Query DDB `Drivers` by PK | **New bulk endpoint.** Replaces per-driver lazy fetch. |
-| `api-replay` | `GET /sessions/{key}/replay` — fan-out reads positions/laps/race-control/telemetry-summary from DDB, single response | **New.** Payload can be a few MB for a full session — acceptable per kickoff. |
-| `ws-connect`/`ws-disconnect` | Connection table management | Unchanged. |
-| `ws-push` | DynamoDB Streams → WS fanout for live mode only | Unchanged. |
-| `ws-agent` | **New.** Parse `agent.ask` action, invoke Bedrock AgentCore stream, forward tokens back to `ConnectionId`. | Tools: `get_session`, `get_standings`, `get_driver_laps`, `get_telemetry_sample`, `get_race_control` (read-only). |
+| `poller` | DONE | Live-only mode; drivers upsert on session discovery. No replay logic. |
+| `transformer` | DONE | Carried from v1 (no v2 changes — idempotent put logic was already right). |
+| `api-sessions` | DONE | Carried from v1 (contract unchanged). |
+| `api-drivers` | DONE | Rewritten: handles both `GET /sessions/{key}/drivers` (bulk DDB) and `GET /drivers/{n}` (OpenF1 proxy). |
+| `api-replay` | DONE | New bulk endpoint. Loops over driver numbers for Laps. CarData intentionally excluded. |
+| `ws-connect`/`ws-disconnect` | DONE | Carried from v1 (no v2 changes). |
+| `ws-push` | DONE | Carried from v1 (no v2 changes — live fanout still wired via DDB Streams). |
+| `ws-agent` | DONE (stub) | Streams stubbed reply token-by-token. Real Bedrock path raises NotImplementedError until Phase 5. |
 
 ## Phase 4 — Frontend (PENDING)
 
