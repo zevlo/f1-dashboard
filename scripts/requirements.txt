@@ -1,0 +1,2 @@
+# Dev-only tools (seed scripts, etc). Not deployed.
+boto3>=1.34

@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+@theme {
+  --color-zinc-950: #0a0a0b;
+  --color-team-default: #6b7280;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background: theme(--color-zinc-950);
+  color: theme(--color-zinc-100);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "tnum";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Slim dark scrollbars so they blend with the dashboard aesthetic */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: theme(--color-zinc-700) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background-color: theme(--color-zinc-700);
+  border-radius: 4px;
+}
+
+/* Monospaced numbers for timing screens */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}

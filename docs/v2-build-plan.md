@@ -140,47 +140,62 @@ All 9 Lambdas shipped as part of Phase 2 (the Terraform `archive_file` data sour
 | `ws-push` | DONE | Carried from v1 (no v2 changes — live fanout still wired via DDB Streams). |
 | `ws-agent` | DONE (stub) | Streams stubbed reply token-by-token. Real Bedrock path raises NotImplementedError until Phase 5. |
 
-## Phase 4 — Frontend (PENDING)
+## Phase 4 — Frontend (DONE 2026-07-20)
 
-**Stack:** Vite + React 19 + TypeScript + TanStack Query v5 + Zustand + Tailwind 4 + Recharts.
+React 19 + Vite + TypeScript + TanStack Query v5 + Zustand + Tailwind 4 + Recharts. Desktop-only (1440px+).
 
-**Folder layout:**
+**Folder layout shipped:**
 ```
 frontend/src/
-  main.tsx
-  App.tsx
-  queryClient.ts           # TanStack Query setup
+  main.tsx                      # React entry; QueryClientProvider wrap
+  App.tsx                       # layout + state wiring
+  config.ts                     # VITE_API_BASE_URL / VITE_WS_URL
+  queryClient.ts                # TanStack Query client (staleTime 30s, gcTime 5m)
+  types.ts                      # telemetry domain types + WS message shapes
+  index.css                     # Tailwind 4 import + scrollbar/theme
   store/
-    sessionStore.ts        # selectedSessionKey, mode
-    driverStore.ts         # selectedDriverNumber, comparisonDrivers[]
-    replayStore.ts         # isPlaying, speed, scrubTs
+    sessionStore.ts             # selectedSessionKey, mode
+    driverStore.ts              # selectedDriverNumber, comparisonDrivers[]
+    replayStore.ts              # isPlaying, speed, scrubTs, bounds
+    agentStore.ts               # messages[], streamingId, thinking
+    agentStore.test.ts          # 6 unit tests for streaming protocol
   api/
-    client.ts              # fetch wrappers
-    hooks.ts               # useSessions, useSession, useDrivers, useReplay, useLaps
+    client.ts                   # typed fetch wrappers for every REST route
+    hooks.ts                    # TanStack Query hooks (stable cache keys)
   ws/
-    useWebSocket.ts        # single connection per session
-    types.ts
-  components/
-    TopBar.tsx
-    FlagBanner.tsx
-    PositionTower.tsx
-    TelemetryPanel.tsx
-    LapTimeChart.tsx
-    ReplayControls.tsx
-    AgentChatPanel.tsx
-    Panel.tsx              # shared shell
+    useWebSocket.ts             # single connection per session; merges live
+                                # ticks to query cache + dispatches agent
+                                # token stream to agentStore
   derive/
-    towerRows.ts
-    telemetryAt.ts         # client-side cutoff for replay
-  types.ts
+    towerRows.ts                # positions + drivers -> sorted tower rows
+    telemetryAt.ts              # replay cutoff filters
+    towerRows.test.ts           # 5 unit tests
+    telemetryAt.test.ts         # 6 unit tests
+  components/
+    Panel.tsx                   # shared shell (title + status + body)
+    TopBar.tsx                  # session picker + mode pill + lap counter
+    FlagBanner.tsx              # slim banner replacing race-control panel
+    PositionTower.tsx           # 260px left column, shift-click to compare
+    TelemetryPanel.tsx          # driver header + latest lap + live gauges
+    LapTimeChart.tsx            # Recharts multi-driver lap-time line chart
+    ReplayControls.tsx          # play/pause/speed/scrubber (historical only)
+    AgentChatPanel.tsx          # 360px right column, streams via WS
 ```
 
-**Key behaviors:**
-- **On session load:** parallel-prefetch `useSession`, `useDrivers`, `useReplay` via TanStack Query. Drivers cache is keyed by session_key; never re-fetched within a session.
-- **Driver click:** only writes to `driverStore` — no network. Tower/telemetry/chart all subscribe to the store and re-render against cached data only.
-- **Live mode:** WS pushes merge into the query cache via `queryClient.setQueryData`. Tower updates inline (no flash).
-- **Replay mode:** `ReplayControls` drives a `requestAnimationFrame` clock. `scrubTs` in `replayStore` is the single source of truth; all components derive their visible state via `telemetryAt(data, scrubTs)`. Play/pause/speed mutate the clock — zero network.
-- **Agent chat:** single input, messages stream token-by-token via WS `agent.token` events. Suggested-prompt chips above input ("Who's leading?", "Compare VER and NOR on sector 2", "What happened on lap 12?").
+**Key behaviours:**
+- **On session load:** parallel prefetch `useSession` + `useDrivers` + `useReplay` via TanStack Query. Drivers cache is keyed by session_key; never re-fetched within a session. ✓ kills the v1 "drivers show as numbers until clicked" bug.
+- **Driver click:** only writes to `driverStore` — no network. Tower/telemetry/chart all subscribe to the store and re-render against cached data only. ✓ kills the v1 "each click causes whole refresh" bug.
+- **Live mode:** WS pushes merge into the query cache via `queryClient.setQueryData`. Tower updates inline.
+- **Replay mode:** `ReplayControls` drives a `requestAnimationFrame` clock. `scrubTs` in `replayStore` is the single source of truth; all components derive their visible state via `derive/telemetryAt.ts` (pure functions over the bulk-replay payload). Play/pause/speed mutate the clock — zero network.
+- **Agent chat:** single input, messages stream token-by-token via WS `agent.token` events. Suggested-prompt chips above input.
+
+**Verified:**
+- 17/17 Vitest unit tests pass (derive + agentStore)
+- `tsc -b` clean, `oxlint` clean, `vite build` succeeds (660 modules, 610KB JS / 182KB gzipped)
+- `vite dev` serves at http://localhost:5173
+- Smoke-tested against the live-seeded session (Austria 2026, key=11315): tower loads, drivers display as names immediately, click updates telemetry panel without network, scrub works.
+
+**Side quest:** Added `scripts/seed_session.py` — one-shot boto3 script that pulls a historical session from OpenF1 + writes to all 6 dev DDB tables. Used to seed Austria 2026 (1 session, 22 drivers, 499 positions, 1342 laps, 208 race-control events) so the frontend has data to demo against outside of live race weekends. Re-runnable: `python3 scripts/seed_session.py [session_key]`.
 
 ## Phase 5 — AgentCore integration (PENDING)
 

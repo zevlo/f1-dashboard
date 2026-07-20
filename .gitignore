@@ -48,3 +48,11 @@ Thumbs.db
 # Local agent / personal notes (not the committed AGENTS.md)
 AGENTS.local.md
 NOTES.md
+
+# Dev venv
+.venv/
+venv/
+
+# Dev tools
+scripts/__pycache__/
+
