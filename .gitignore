@@ -1,0 +1,51 @@
+# Terraform
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+!*.tfvars.example
+terraform/**/build/
+
+# Python (lambdas)
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+lambdas/**/build/
+lambdas/**/*.zip
+
+# Node (frontend)
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.sln
+*.ntvs*
+
+# Local agent / personal notes (not the committed AGENTS.md)
+AGENTS.local.md
+NOTES.md
