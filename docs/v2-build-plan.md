@@ -290,9 +290,9 @@ The extra `*` after `zevlo` (greedy IAM StringLike wildcard) matches both the ol
 
 **Trust policy snapshots** saved at `aws-state-evidence/oidc-trust-policy-{BEFORE,AFTER}-phase6.json` in the Phase 0 snapshot dir.
 
-## Phase 7 — Delete old repo (PENDING — needs `delete_repo` scope)
+## Phase 7 — Delete old repo (DONE 2026-07-20)
 
-Attempted `gh repo delete zevlo/f1-telemetry-dashboard --yes` but the gh token's scopes (`gist, read:org, repo, workflow`) don't include `delete_repo`. Manual follow-up:
+Old repo `zevlo/f1-telemetry-dashboard` deleted via manual `gh repo delete` after the gh token was refreshed with `delete_repo` scope:
 
 ```bash
 gh auth refresh -h github.com -s delete_repo
@@ -300,6 +300,12 @@ gh repo delete zevlo/f1-telemetry-dashboard --yes
 ```
 
 Phase 0 snapshot preserved at `/var/folders/z6/gvc0hbp90lg2hkn71stbn2xm0000gn/T/opencode/f1-v2-snapshot/` for emergency rollback reference. The local working tree at `/Users/za/projects/f1-telemetry-dashboard` can also be `rm -rf`'d once the user is confident v2 is stable.
+
+---
+
+## Project complete
+
+All 7 phases shipped. Production dashboard live at https://f1.zevlo.net with CI/CD via GitHub Actions. See the [build status section](./README.md#build-status) in the README for the per-phase checklist.
 
 ## Phase 7 — Tests + polish (PENDING)
 

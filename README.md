@@ -120,7 +120,7 @@ WebSocket events (target):
 - [x] Phase 4 — Frontend: React + Vite + TanStack Query + Zustand + Tailwind
 - [x] Phase 5 — AgentCore integration (Amazon Nova Pro via Bedrock Converse + 5 telemetry tools)
 - [x] Phase 6 — Manual S3 + CloudFront deploy + WS custom domain fix + GitHub Actions CI/CD
-- [ ] Phase 7 — Delete old `zevlo/f1-telemetry-dashboard` repo (pending `delete_repo` scope — see follow-up below)
+- [x] Phase 7 — Old `zevlo/f1-telemetry-dashboard` repo deleted (manual `gh repo delete` on 2026-07-20)
 
 See [`docs/v2-build-plan.md`](docs/v2-build-plan.md) for the full plan with phase-level detail.
 
