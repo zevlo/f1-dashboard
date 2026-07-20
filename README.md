@@ -112,7 +112,7 @@ WebSocket events (target):
 ## Build status
 - [x] Phase 0 — pre-flight snapshot of v1 (at `/var/folders/.../f1-v2-snapshot`)
 - [x] Phase 1 — new repo + skeleton (this commit)
-- [ ] Phase 1.5 — update `github-oidc-f1-telemetry` role trust to include `zevlo/f1-dashboard`
+- [x] Phase 1.5 — update `github-oidc-f1-telemetry` role trust to include `zevlo/f1-dashboard` (now `repo:zevlo/f1-*:*`, forward-compatible)
 - [ ] Phase 2 — Terraform: `state rm` parent zone + ACM cert, `destroy`, rebuild with `Drivers` table + new endpoints
 - [ ] Phase 3 — Lambdas: rewrite all 7 + add `api-replay` + `ws-agent`
 - [ ] Phase 4 — Frontend: React + Vite + TanStack Query + Zustand + Tailwind

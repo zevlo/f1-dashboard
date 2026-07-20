@@ -57,32 +57,24 @@ Captured at `/var/folders/z6/gvc0hbp90lg2hkn71stbn2xm0000gn/T/opencode/f1-v2-sna
 - Seeded: `.gitignore`, `README.md`, `AGENTS.md`, `docs/v2-build-plan.md`, `docs/f1-telemetry-dashboard-v1-reference.md`, `docs/f1-race-engineer-agent.md`, `docs/wireframe-v0-prompt.md`
 - Directory skeleton: `terraform/{environments/dev,modules/*}/`, `lambdas/*`, `frontend/`, `.github/workflows/`
 
-## Phase 1.5 — Update GitHub OIDC trust (PENDING)
+## Phase 1.5 — Update GitHub OIDC trust (DONE 2026-07-20)
 
-Before any v2 CI run, update the trust policy on `github-oidc-f1-telemetry` (ARN `arn:aws:iam::746669194590:role/github-oidc-f1-telemetry`) to include the new repo:
+Applied 2026-07-20 to `github-oidc-f1-telemetry` (ARN `arn:aws:iam::746669194590:role/github-oidc-f1-telemetry`). BEFORE/AFTER policy documents captured at `aws-state-evidence/oidc-trust-policy-{BEFORE,AFTER}-phase1.5.json` in the Phase 0 snapshot dir.
 
+The only change is the `StringLike` condition:
+
+```diff
+- "token.actions.githubusercontent.com:sub": "repo:zevlo/f1-telemetry-dashboard:*"
++ "token.actions.githubusercontent.com:sub": "repo:zevlo/f1-*:*"
+```
+
+Wildcard pattern (`repo:zevlo/f1-*:*`) is forward-compatible — matches both the old `f1-telemetry-dashboard` repo (so its CI keeps working until we delete it) and the new `f1-dashboard` repo, plus any future `f1-*` variant without another IAM round-trip.
+
+If you need to roll back:
 ```bash
-# Update the StringLike condition to allow both repos (forward-compatible)
 aws iam update-assume-role-policy \
   --role-name github-oidc-f1-telemetry \
-  --policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::746669194590:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
-        },
-        "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:zevlo/f1-*:*"
-        }
-      }
-    }]
-  }'
+  --policy-document file://<path-to-BEFORE-phase1.5.json>
 ```
 
 ## Phase 2 — Terraform (PENDING)
