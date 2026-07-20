@@ -270,6 +270,26 @@ Connected to `wss://meaysn87r1.execute-api.us-east-1.amazonaws.com/v1?sessionId=
 - `frontend` job (sequenced after infra): reads terraform outputs at runtime → `npm ci` → `vite build` with VITE env vars injected from outputs → `aws s3 sync` with immutable cache on hashed assets + must-revalidate on `index.html` → `aws cloudfront create-invalidation`.
 - Trigger paths: `terraform/**`, `lambdas/**`, `frontend/**`, `.github/workflows/deploy.yml`. PRs don't deploy.
 
+### Phase 6.5b — OIDC trust widened again (GitHub org-ID subject format)
+First CI run on the new repo failed with `Not authorized to perform sts:AssumeRoleWithWebIdentity`. CloudTrail lookup showed GitHub's actual `sub` claim is now:
+
+```
+repo:zevlo@104938351/f1-dashboard@1306969528:ref:refs/heads/main
+```
+
+(not the textbook `repo:zevlo/f1-dashboard:ref:refs/heads/main` — GitHub now embeds the org + repo numeric IDs into the subject for orgs that have the new OIDC format enabled.)
+
+The Phase 1.5 pattern `repo:zevlo/f1-*:*` doesn't match `repo:zevlo@104938351/f1-dashboard@1306969528:ref:...` because of the `@<digits>` between `zevlo` and `/`. Updated trust policy condition:
+
+```diff
+- "token.actions.githubusercontent.com:sub": "repo:zevlo/f1-*:*"
++ "token.actions.githubusercontent.com:sub": "repo:zevlo*/f1-*:*"
+```
+
+The extra `*` after `zevlo` (greedy IAM StringLike wildcard) matches both the old (`repo:zevlo/f1-…`) and new (`repo:zevlo@104938351/f1-…`) formats. Scoped to `zevlo*` so a hypothetical `zevlo-attacker-organisation` still wouldn't match. Re-ran the failed workflow — both jobs went green, deploy completed via CI.
+
+**Trust policy snapshots** saved at `aws-state-evidence/oidc-trust-policy-{BEFORE,AFTER}-phase6.json` in the Phase 0 snapshot dir.
+
 ## Phase 7 — Delete old repo (PENDING — needs `delete_repo` scope)
 
 Attempted `gh repo delete zevlo/f1-telemetry-dashboard --yes` but the gh token's scopes (`gist, read:org, repo, workflow`) don't include `delete_repo`. Manual follow-up:
